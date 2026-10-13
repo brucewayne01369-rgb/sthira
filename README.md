@@ -285,3 +285,90 @@ dialog::backdrop{background:rgba(16,18,20,.5)}
       <div class="essays" id="essays"></div>
       <button class="btn btn-ghost btn-sm" id="moreWritings" type="button" hidden>Show older writings</button>
       <p class="after">Looking for the private letters and long essays? <a 
+renderLibrary();
+
+/* =====================================================================
+   Private vault (from vault.js)
+   ===================================================================== */
+const vault={fails:0,until:0,timer:0,admin:false,key:null,box:null,items:[]};
+const KIND={Letter:'k-letter',Essay:'k-essay',Writing:'k-writing'};
+function renderVault(items){
+  $('#vaultList').replaceChildren(...items.map(it=>el('details',{class:'v-item'},
+    el('summary',null,el('span',{class:'chip '+(KIND[it.k]||'k-writing')},it.k),el('strong',null,it.t),el('span',{class:'v-date'},it.d||'')),
+    el('div',{class:'v-body'},(it.p||[]).map(p=>el('p',null,p))))));
+}
+function lockVault(){
+  clearTimeout(vault.timer);vault.key=null;vault.items=[];
+  $('#vaultList').replaceChildren();$('#stText').value='';$('#stResult').value='';$('#stOut').hidden=true;$('#stMsg').textContent='';
+  $('#stPass1').value='';$('#stPass2').value='';
+  $('#vaultContent').hidden=true;$('#vaultGate').hidden=false;$('#studio').hidden=true;vault.admin=false;
+}
+$('#vaultToggle').addEventListener('click',e=>{
+  const i=$('#vaultCode'),show=i.type==='password';
+  i.type=show?'text':'password';e.currentTarget.textContent=show?'Hide':'Show';e.currentTarget.setAttribute('aria-pressed',String(show));
+});
+$('#vaultForm').addEventListener('submit',async e=>{
+  e.preventDefault();
+  const inp=$('#vaultCode'),err=$('#vaultErr'),btn=$('#vaultBtn'),gate=$('#vaultGate'),now=Date.now();
+  if(now<vault.until){err.textContent='Too many attempts. Try again in '+Math.ceil((vault.until-now)/1000)+' seconds.';return}
+  const pass=inp.value.trim();
+  if(!pass){err.textContent='Enter your access password to continue.';return}
+  if(!window.SITE_VAULT){err.textContent='The vault file (vault.js) could not be loaded. Check that it is uploaded next to index.html.';return}
+  if(!HAS_SUBTLE){err.textContent='The vault needs a secure (https) connection to open.';return}
+  btn.disabled=true;btn.textContent='Unlocking...';err.textContent='';
+  try{
+    const r=await openVault(window.SITE_VAULT,pass);
+    vault.fails=0;vault.key=r.key;vault.box=window.SITE_VAULT;vault.items=r.items;
+    renderVault(r.items);inp.value='';
+    gate.hidden=true;$('#vaultContent').hidden=false;
+    $('#studio').hidden=!vault.admin;if(vault.admin)$('#stText').value=entriesToText(r.items);
+    clearTimeout(vault.timer);vault.timer=setTimeout(lockVault,15*60*1000);
+    $('#vaultContent').scrollIntoView({block:'nearest'});
+  }catch(x){
+    if(++vault.fails>=5){vault.fails=0;vault.until=Date.now()+30000}
+    err.textContent='That password did not open the vault. Check it and try again.';
+    gate.classList.remove('shake');void gate.offsetWidth;gate.classList.add('shake');
+  }finally{btn.disabled=false;btn.textContent='Unlock vault'}
+});
+$('#vaultLock').addEventListener('click',()=>{lockVault();toast('Vault locked.')});
+
+/* ----- Vault studio (opened from the footer "Admin" button) ----- */
+$('#adminBtn').addEventListener('click',()=>{
+  vault.admin=true;
+  if(vault.key){$('#studio').hidden=false;$('#stText').value=entriesToText(vault.items);$('#studio').scrollIntoView({behavior:'smooth',block:'start'})}
+  else{location.hash='#vault';toast('Unlock the vault to open the studio.');setTimeout(()=>$('#vaultCode').focus(),400)}
+});
+$('#stNew').addEventListener('click',()=>{
+  const t=$('#stText'),d=new Date().toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'});
+  t.value='# New title | Writing | '+d+'\n\nWrite here.\n\n\n'+t.value;t.focus();t.setSelectionRange(2,11);
+});
+$('#stBuild').addEventListener('click',async()=>{
+  const msg=$('#stMsg');msg.textContent='';
+  const items=parseEntries($('#stText').value,true),p1=$('#stPass1').value.trim(),p2=$('#stPass2').value.trim();
+  if(!items.length){msg.textContent='Add at least one piece that starts with # Title | Kind | Date and has a paragraph.';return}
+  if((p1||p2)&&(!p1||p1.length<8||(p2&&p2.length<8))){msg.textContent='Passwords need at least 8 characters. Put your main one in Password 1.';return}
+  if(!vault.key||!HAS_SUBTLE){msg.textContent='Unlock the vault first.';return}
+  msg.textContent='Encrypting...';
+  try{
+    let box;
+    if(p1){
+      const key=rand(32),c=await sealContent(items,key);
+      box={v:2,n:VAULT_ITER,w:await lockKey(key,[p1,p2].filter(Boolean),VAULT_ITER),i:c.i,d:c.d};vault.key=key;
+    }else{
+      const c=await sealContent(items,vault.key);
+      box={v:2,n:vault.box.n,w:vault.box.w,i:c.i,d:c.d};
+    }
+    vault.box=box;vault.items=items;renderVault(items);
+    $('#stResult').value='window.SITE_VAULT='+JSON.stringify(box)+';\n';$('#stOut').hidden=false;
+    msg.textContent='Done. '+items.length+(items.length===1?' piece':' pieces')+' encrypted. Now copy or download the result.';
+  }catch(x){msg.textContent='Encryption failed. Try again.'}
+});
+$('#stCopy').addEventListener('click',()=>copyField($('#stResult')));
+$('#stDownload').addEventListener('click',()=>saveText($('#stResult').value,'vault.js'));
+
+/* ---------- Init ---------- */
+setMode('login');paintAuth();
+})();
+</script>
+</body>
+</html>
